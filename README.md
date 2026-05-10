@@ -39,7 +39,7 @@ Modelagem do Preço de Casas em Boston usando abordagem bayesiana em um modelo T
 ![](./grafico1.png)
 ![](./grafico2.png)
 
-O modelo teve bons resultados;
+O modelo teve bom ajuste;
 
 ## Análise no dataset de teste:
 MAE : 3.05826
