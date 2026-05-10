@@ -1,0 +1,296 @@
+---
+title: "Análise Exploratória"
+output: html_document
+---
+
+# Análise de Preços de Casas em Boston
+
+## Variáveis
+
+- **CRIM:** Taxa de criminalidade *per capita* por cidade.
+
+- **ZN:** Proporção de terrenos residenciais zoneados para lotes acima de 25.000 pés² (\~2.300 m²).
+
+- **INDUS:** Proporção de acres ocupados por empresas não-varejistas (zonas industriais/comerciais) por cidade.
+
+- **CHAS:** Variável binária do Rio Charles (1 se o terreno faz fronteira com o rio; 0 caso contrário).
+
+- **NOX:** Concentração de óxidos nítricos (partes por 10 milhões).
+
+- **RM:** Número médio de quartos por habitação.
+
+- **AGE:** Proporção de unidades ocupadas pelos proprietários construídas antes de 1940.
+
+- **DIS:** Distâncias ponderadas até cinco centros de emprego de Boston.
+
+- **RAD:** Índice de acessibilidade às rodovias radiais.
+
+- **TAX:** Taxa de imposto sobre a propriedade de valor total por US\$ 10.000.
+
+- **PTRATIO:** Relação aluno-professor por cidade.
+
+- **B:** Resultado da equação $B = 1000(Bk - 0,63)^2$, onde $Bk$ é a proporção de pessoas negras por cidade.
+
+- **LSTAT:** Porcentagem da população de classe social baixa.
+
+- **MEDV:** Valor médio das casas ocupadas pelos proprietários (em milhares de dólares — US\$ 1.000s).
+
+## Dataset
+
+```{r}
+source("functions.R")
+source("imports.R")
+```
+
+```{r}
+dados <- read.csv("boston.csv")
+
+dados$CHAS <- as.factor(dados$CHAS)
+dados$RAD <- as.factor(dados$RAD)
+```
+
+```{r}
+head(dados)
+```
+
+```{r}
+sum(is.na(dados))
+
+sum(duplicated(dados))
+```
+
+Sem campos nulos, nem duplicatas
+
+```{r}
+str(dados)
+```
+
+Dimensão do dataset
+
+```{r}
+dim(dados)
+```
+
+## Análise Exploratória de Dados
+
+### Análise Univariada
+
+#### CRIM: per capita crime rate by town
+
+```{r, echo=TRUE, fig.height=8, fig.width=10}
+quanti_var_plots(dados$CRIM, "CRIM")
+```
+
+#### ZN: proportion of residential land zoned for lots over 25,000 sq.ft.
+
+```{r, echo=TRUE, fig.height=8, fig.width=10}
+quanti_var_plots(dados$ZN, "ZN")
+```
+
+Cerca de 73% dos dados possui valor 0, ou seja, pouca variabilidade. (categorizar essa variável é uma opçao)
+
+```{r}
+quantile(dados$ZN, probs = c(0.73))
+```
+
+#### INDUS: proportion of non-retail business acres per town
+
+```{r, echo=TRUE, fig.height=8, fig.width=10}
+quanti_var_plots(dados$INDUS)
+```
+
+#### CHAS: Charles River dummy variable (1 if tract bounds river; 0 otherwise)
+
+```{r, echo=TRUE, fig.height=8, fig.width=10}
+quali_var_plots(dados$CHAS, "CHAS")
+```
+
+A proporção de indivíduos à margem do rio é menor que 7%, ou seja, essa categoria não está muito bem representada. Talves ela precise ser removida, por ter baixa variabilidade.
+
+#### NOX: nitric oxides concentration (parts per 10 million) [parts/10M]
+
+```{r, echo=TRUE, fig.height=8, fig.width=10}
+quanti_var_plots(dados$NOX, "NOX")
+```
+
+#### RM: average number of rooms per dwelling
+
+```{r, echo=TRUE, fig.height=8, fig.width=10}
+quanti_var_plots(dados$RM, "RM")
+```
+
+#### AGE: proportion of owner-occupied units built prior to 1940
+
+```{r, echo=TRUE, fig.height=8, fig.width=10}
+quanti_var_plots(dados$AGE, "AGE")
+```
+
+#### DIS: weighted distances to five Boston employment centres
+
+```{r, echo=TRUE, fig.height=8, fig.width=10}
+quanti_var_plots(dados$DIS, "DIS")
+```
+
+#### RAD: index of accessibility to radial highways
+
+```{r, echo=TRUE, fig.height=8, fig.width=10}
+quali_var_plots(dados$RAD, "RAD")
+```
+
+#### TAX: full-value property-tax rate per 10,000
+
+```{r, echo=TRUE, fig.height=8, fig.width=10}
+quanti_var_plots(dados$TAX, "TAX")
+```
+
+Cerca de 26% do dataset possui tax=666, talvez uma categorização seja necessária aqui.
+
+#### PTRATIO: pupil-teacher ratio by town
+
+```{r, echo=TRUE, fig.height=8, fig.width=10}
+quanti_var_plots(dados$PTRATIO, "PTRATIO")
+```
+
+#### B: The result of the equation B=1000(Bk - 0.63)\^2 where Bk is the proportion of blacks by town
+
+```{r, echo=TRUE, fig.height=8, fig.width=10}
+quanti_var_plots(dados$B, "B")
+```
+
+#### LSTAT: % lower status of the population
+
+```{r, echo=TRUE, fig.height=8, fig.width=10}
+quanti_var_plots(dados$LSTAT, "LSTAT")
+```
+
+#### MEDV: Median value of owner-occupied homes in \$1000's [k\$]
+
+```{r, echo=TRUE, fig.height=8, fig.width=10}
+quanti_var_plots(dados$MEDV, "MEDV")
+```
+
+#### Resumo:
+
+- O dataset possui muitas variáveis assimétricas, ou seja, os dados tendem a estar concentrado em uma região no X-space. Entretanto, algumas variáveis possuem caudas pesadas, então há muitos pontos de Leverage. Uma análise deve ser feita para saber se esses pontos são pontos influentes.
+
+- A variável CHAS tem variabilidade baixa, então ela será removida durante o processo de modelagem.
+
+- Um dos problemas mais evidentes nesse dataset é a truncagem em 50 da variável MEDV, isso de certa forma oculta os valores reais dos imovéis e dificulta o modelo de aprender adequadamento. Por exemplo, dois imóveis com características bastantes distintas podem ter MEDV=50, mesmo que claramente um imóvel seja mais caro que o outro (de acordo com as covariáveis associadas).
+
+### Análise bivariada
+
+```{r}
+corr <- cor(dados %>% select_if(is.numeric))
+
+p_mat <- cor.mtest(
+  dados %>% dplyr::select_if(is.numeric),
+  conf.level = 0.95
+)$p
+
+corrplot(corr, 
+         method = "color", 
+         addCoef.col = "black",        # Adiciona o coeficiente numérico
+         number.cex = 0.7,
+         p.mat = p_mat,   
+         sig.level = 0.05,
+         insig = "blank",              # Deixa em branco se NÃO for significativo
+         tl.cex = 0.8,        
+         mar = c(0, 0, 1, 0)) 
+```
+
+Há algumas covariáveis que são muito correlacionadas entre si, será necessário fazer um estudo de multicolinearidade.
+
+```{r}
+plot_scatter(dados$AGE, dados$DIS, "INDUS", "DIS")
+```
+
+```{r}
+dados %>%
+  dplyr::select_if(is.numeric) %>% 
+  pivot_longer(
+    cols = -MEDV, 
+    names_to = "preditor", 
+    values_to = "valor"
+  ) %>%
+  ggplot(aes(x = valor, y = MEDV)) +
+  geom_point(
+    alpha = 0.4,
+    size = 1,
+    color = "darkslategrey"
+  ) +
+  geom_smooth(
+    method = "lm",
+    col = "red",
+    se = FALSE
+  ) +
+  facet_wrap(
+    ~preditor,
+    scales = "free_x"
+  ) +
+  theme_minimal() +
+  labs(
+    title = "Análise Bivariada: Preditores Numéricos vs MEDV",
+    x = "Valor do Preditor",
+    y = "Valor da Casa (MEDV)"
+  )
+```
+
+Aqui, é possível observar o impacto da censura (MEDV=50) nas variáveis RM e LSTAT;
+
+A relação entre LSTAT e MEDV parece ser não linear, termos polinomiais provavelmente devem ser inseridos no modelo.
+
+É possível observar que a variância não é constante (ZN, CRIM)
+
+```{r}
+dados %>%
+  dplyr::select_if(is.numeric) %>% 
+  dplyr::mutate(RAD = dados$RAD) %>%
+  pivot_longer(
+    cols = -c(TAX, RAD), 
+    names_to = "preditor", 
+    values_to = "valor"
+  ) %>%
+  ggplot(aes(x = valor, y = TAX, color = factor(RAD))) +
+  geom_point(
+    alpha = 0.6,
+    size = 1.3
+  ) +
+  geom_smooth(
+    aes(group = 1),
+    method = "lm",
+    se = FALSE,
+    color = "black",
+    linetype = "dashed",
+    linewidth = 0.5
+  ) +
+  facet_wrap(
+    ~preditor,
+    scales = "free_x"
+  ) +
+  theme_minimal(base_size = 12) +
+  scale_color_viridis_d(
+    option = "plasma",
+    name = "Índice RAD"
+  ) +
+  labs(
+    title = "Análise de Dispersão: Preditores vs TAX",
+    subtitle = "Segmentação por Acessibilidade a Rodovias (RAD)",
+    x = "Valor do Preditor",
+    y = "Taxa de Imposto (TAX)"
+  ) +
+  theme(
+    legend.position = "right",
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(face = "bold")
+  )
+```
+
+```{r}
+quali_quanti_boxplot(dados, "RAD", "TAX")
+```
+
+```{r}
+quali_quanti_boxplot(dados, "CHAS", "MEDV")
+```
+
+TAX e RAD possuem uma forte associação.

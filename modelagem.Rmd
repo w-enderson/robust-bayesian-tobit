@@ -1,0 +1,563 @@
+---
+title: "modelagem"
+output: html_document
+---
+
+## Dataset Split
+
+```{r}
+source("functions.R")
+source("imports.R")
+```
+
+```{r}
+dados <- read.csv("boston.csv")
+
+dados$CHAS <- as.factor(dados$CHAS)
+dados$RAD <- as.factor(dados$RAD)
+
+# Já que há muitos zeros em ZN, optamos por categorizá-la
+dados$ZN_cat <- ifelse(dados$ZN == 0,
+                        "Zero",
+                        "Nonzero")
+dados$ZN_cat <- as.factor(dados$ZN_cat)
+```
+
+```{r}
+cols_numericas <- sapply(dados, is.numeric)
+
+dados_scaled <- dados
+
+nomes_preditores <- setdiff(names(dados)[cols_numericas], "MEDV")
+dados_scaled[, nomes_preditores] <- scale(dados[, nomes_preditores])
+```
+
+```{r}
+set.seed(123)
+
+idx <- createDataPartition(
+  dados_scaled$MEDV >= 50,
+  p = 0.8,
+  list = FALSE
+)
+
+dados_estimacao <- dados_scaled[idx, ]
+dados_predicao  <- dados_scaled[-idx, ]
+
+```
+
+## Parte 1: Modelagem com Regressão Linear (apenas para seleção de variáveis)
+
+```{r}
+dados_aux <- subset(dados_estimacao, MEDV < 50)
+
+```
+
+```{r}
+model1 <- lm(MEDV ~ . -ZN, data= dados_aux)
+summary(model1)
+```
+
+```{r}
+vif(model1)
+
+```
+
+O Variance Inflation Factor mostra que a variável TAX está fortemente correlacionada com as outras. Mesmo que o GVIF de RAD tenha dado um valor alto, é importante lembrar que ela é uma variável categórica e possui 8 graus de liberdade.
+
+## Modelo Linear 2 (sem TAX)
+
+```{r}
+model2 <- lm(MEDV ~ . -ZN -TAX, data= dados_aux)
+summary(model2)
+```
+
+```{r}
+vif(model2)
+```
+
+A multicolinearidade agora não é um problema, entretando o Erro Padrão das variáveis indicadoras de RAD estão relativamente altos.
+
+```{r}
+plot(model2, id.n=5, which = 1:6)
+```
+
+Ao analisar os resíduos, é possível identificar algumas coisas:
+
+- Há não-linearidades que o modelo não conseguiu capturar;
+
+- A distribuição dos resíduos tem caldas pesadas. O modelo possui erros com valores muito grandes, além do esperado.
+
+- Há problema de heterocedasticidade.
+
+- Há muitos pontos de influência, além de serem outliers (anomalias no X-Space), eles influenciam consideravelmente os coeficientes do modelo.
+
+```{r, fig.height=12, fig.width=10}
+dados_plot <- subset(dados_aux, select = -c(TAX, ZN))
+
+plot_residuos_preditores(model2, dados_plot)
+```
+
+Há uma não linearidade nos resíduos contra LSTAT e RM.
+
+```{r}
+d_cook <- cooks.distance(model2)
+
+# cutoff (4/n)
+n <- nrow(model.frame(model2))
+cutoff <- 4 / n
+
+outliers_influentes <- which(d_cook > cutoff)
+
+names(d_cook[outliers_influentes])
+```
+
+```{r}
+dados[names(d_cook[outliers_influentes]), ]
+```
+
+- Há muitos pontos discrepantes no dataset que influenciam os parâmetros do modelo, mas parecem ser pontos com valores reais, então ao invés de remover esses valores, optamos por usar Regressão Robusta;
+
+### Modelo3 - Regressão Robusta (Com termo quadrático de RM)
+
+```{r}
+model3 <- rlm(MEDV ~ . -ZN -TAX + I(RM**2), data= dados_aux)
+summary(model3)
+```
+
+```{r}
+plot(model3)
+```
+
+```{r, fig.height=12, fig.width=10}
+dados_plot <- subset(dados_aux, select = -c(TAX, ZN))
+
+plot_residuos_preditores(model3, dados_plot)
+```
+
+O modelo parece bom, mas ainda há problema com heterocedasticidade, então faremos inferência com HC3, que usa uma matriz de covariâncias robusta
+
+```{r}
+coeftest(
+  model3,
+  vcov = vcovHC(model3, type = "HC3")
+)
+```
+
+### Seleção de Variáveis (usando stepwise)
+
+```{r}
+
+model4 <- lm(MEDV ~ . -ZN -TAX + I(RM**2), data= dados_aux)
+
+model_bic <- step(
+  model4,
+  direction = "both",
+  k = log(nrow(dados_aux)),
+  trace = TRUE
+)
+summary(model_bic)
+
+```
+
+```{r}
+model5 <- rlm(MEDV ~ CRIM + NOX + RM + AGE + DIS + PTRATIO + B + LSTAT + I(RM^2),
+              data=dados_aux
+              )
+summary(model5)
+```
+
+```{r}
+coeftest(
+  model5,
+  vcov = vcovHC(model5, type = "HC3")
+)
+```
+
+Todas variáveis parecem significativas, ao analisar o modelo linear robusto no dataset auxiliar (MEDV=50 removidos)
+
+```{r}
+model6 <- tobit(MEDV ~ CRIM + NOX + RM + AGE + DIS + PTRATIO + B + LSTAT + I(RM^2), 
+                 left = -Inf, right = 50, 
+                 data = dados_estimacao)
+
+summary(model6)
+```
+
+Como as suposições do tobit não são razoáveis (normalidade, homocedasticidade), optamos por fazer inferência via bootstrap
+
+```{r}
+
+tobit_boot_fun <- function(data, indices) {
+  d <- data[indices, ] # Reamostragem
+  modelo <- tobit(MEDV ~ CRIM + NOX + RM + AGE + DIS + PTRATIO + B + LSTAT + I(RM^2), 
+                  left = -Inf, right = 50, data = d)
+  return(coef(modelo))
+}
+
+
+set.seed(123)
+boot_results <- boot(data = dados_estimacao, 
+                     statistic = tobit_boot_fun, 
+                     R = 1000)
+
+print(boot_results)
+
+coef_names <- names(
+  coef(
+    tobit(
+      MEDV ~ CRIM + NOX + RM + AGE + DIS +
+        PTRATIO + B + LSTAT + I(RM^2),
+      
+      left = -Inf,
+      right = 50,
+      
+      data = dados_estimacao
+    )
+  )
+)
+
+print(coef_names)
+
+# =========================
+# GERAR ICs BOOTSTRAP
+# =========================
+
+for(i in 1:length(coef_names)) {
+  
+  cat("\n=========================\n")
+  cat("Variável:", coef_names[i], "\n")
+  cat("=========================\n")
+  
+  ic <- boot.ci(
+    boot_results,
+    type = "perc",
+    index = i
+  )
+  
+  print(ic)
+}
+```
+
+No tobit, os intervalos de confiança bootstrap de AGE e CRIM incluem o zero, então excluiremos;
+
+```{r}
+model7 <- tobit(MEDV ~  NOX + RM  + DIS + PTRATIO + B + LSTAT + I(RM^2), 
+                 left = -Inf, right = 50, 
+                 data = dados_estimacao)
+
+summary(model7)
+```
+
+Ao eliminar CRIM e AGE a verossimilhança permaneceu quase a mesma e os coeficientes do modelo não sofreram mudanças exageradas. Pelo princípio da parcimônia, optaremos pelo uso das 7 variáveis.
+
+### Modelo Tobit Bayesiano com erros T-Student
+
+```{r}
+
+model_string <- "
+model {
+
+  #################################################
+  # LIKELIHOOD — TOBIT t
+  #################################################
+
+  for (i in 1:N) {
+
+    # regressão
+    mu[i] <- beta0 +
+         beta_nox * nox[i] +
+         beta_rm * rm[i] +
+         beta_rm2 * pow(rm[i], 2) +
+         beta_dis * dis[i] +
+         beta_ptratio * ptratio[i] +
+         beta_b * b[i] +
+         beta_lstat * lstat[i]
+         
+
+    # variável latente
+    y_lat[i] ~ dt(mu[i], tau, nu)
+
+    # mecanismo de censura
+    cens[i] ~ dinterval(y_lat[i], 50)
+
+  }
+
+  #################################################
+  # PRIORS DOS COEFICIENTES
+  #################################################
+
+  beta0 ~ dnorm(0, 0.0001)
+
+  beta_nox ~ dnorm(0, 0.0001)
+  beta_rm ~ dnorm(0, 0.0001)
+  beta_rm2 ~ dnorm(0, 0.0001)
+  beta_dis ~ dnorm(0, 0.0001)
+  beta_ptratio ~ dnorm(0, 0.0001)
+  beta_b ~ dnorm(0, 0.0001)
+  beta_lstat ~ dnorm(0, 0.0001)
+
+  #################################################
+  # ESCALA
+  #################################################
+
+  sigma ~ dunif(0, 100)
+
+  tau <- pow(sigma, -2)
+
+  #################################################
+  # GRAUS DE LIBERDADE DA t
+  #################################################
+
+  nu_minus_two ~ dexp(0.1)
+
+  nu <- nu_minus_two + 2
+
+}
+"
+
+```
+
+```{r}
+# =========================================
+# DADOS
+# =========================================
+
+# indicador de censura
+cens <- ifelse(dados_estimacao$MEDV >= 50, 1, 0)
+
+# variável latente
+y_lat <- dados_estimacao$MEDV
+
+# censurados viram NA
+y_lat[dados_estimacao$MEDV == 50] <- NA
+
+data_jags <- list(
+
+  N = nrow(dados_estimacao),
+
+  y_lat = y_lat,
+  cens = cens,
+
+  nox = dados_estimacao$NOX,
+  rm = dados_estimacao$RM,
+  dis = dados_estimacao$DIS,
+  ptratio = dados_estimacao$PTRATIO,
+  b = dados_estimacao$B,
+  lstat = dados_estimacao$LSTAT
+
+)
+```
+
+```{r}
+# =========================================
+# AJUSTE
+# =========================================
+
+model <- jags.model(
+  textConnection(model_string),
+  data = data_jags,
+  n.chains = 1
+)
+```
+
+```{r}
+
+# Burn-in
+update(model, 5000)
+
+```
+
+```{r}
+
+# =========================================
+# MCMC
+# =========================================
+amostras <- coda.samples(
+
+  model,
+
+  variable.names = c(
+    "beta0",
+    "beta_nox",
+    "beta_rm",
+    "beta_rm2",
+    "beta_dis",
+    "beta_ptratio",
+    "beta_b",
+    "beta_lstat",
+    "sigma",
+    "nu"
+  ),
+
+  n.iter = 20000
+)
+```
+
+```{r}
+# extrai amostras posteriores
+post <- as.matrix(amostras)
+
+# número de observações
+N_pred <- nrow(dados_estimacao)
+
+# número de amostras MCMC
+S <- nrow(post)
+
+# matriz para guardar predições
+y_pred <- matrix(NA, nrow = S, ncol = N_pred)
+
+# predição posterior
+for (s in 1:S) {
+
+  mu <- post[s, "beta0"] +
+        post[s, "beta_nox"] * dados_estimacao$NOX +
+        post[s, "beta_rm"] * dados_estimacao$RM +
+        post[s, "beta_rm2"] * (dados_estimacao$RM^2) +
+        post[s, "beta_dis"] * dados_estimacao$DIS +
+        post[s, "beta_ptratio"] * dados_estimacao$PTRATIO +
+        post[s, "beta_b"] * dados_estimacao$B +
+        post[s, "beta_lstat"] * dados_estimacao$LSTAT
+
+  sigma <- post[s, "sigma"]
+  nu <- post[s, "nu"]
+
+  # amostra da t de Student
+  y_sim <- mu + sigma * rt(N_pred, df = nu)
+
+  # aplica censura Tobit
+  y_pred[s, ] <- pmin(y_sim, 50)
+}
+
+# média posterior preditiva
+y_pred_mean <- apply(y_pred, 2, mean)
+
+# intervalos de credibilidade
+y_pred_lower <- apply(y_pred, 2, quantile, 0.025)
+y_pred_upper <- apply(y_pred, 2, quantile, 0.975)
+```
+
+```{r}
+# =========================================
+# RESULTADOS
+# =========================================
+
+summary(amostras)
+```
+
+```{r}
+y_true <- dados_estimacao$MEDV
+
+mae <- mean(abs(y_true - y_pred))
+
+mse <- mean((y_true - y_pred)^2)
+
+rmse <- sqrt(mse)
+
+print(mae)
+print(mse)
+print(rmse)
+```
+
+```{r}
+# ================================
+# VALORES PREDITOS
+# ================================
+
+y_true <- dados_estimacao$MEDV
+
+residuos <- y_true - y_pred_mean
+
+# ================================
+# 1. RESÍDUOS VS AJUSTADOS
+# ================================
+
+plot(
+  y_pred_mean,
+  residuos,
+  pch = 19,
+  xlab = "Valores Ajustados",
+  ylab = "Resíduos",
+  main = "Resíduos vs Ajustados"
+)
+
+abline(h = 0, lty = 2)
+
+# linha suavizada
+lines(
+  lowess(y_pred_mean, residuos),
+  lwd = 2
+)
+
+# ================================
+# 2. QQ-PLOT DOS RESÍDUOS
+# ================================
+
+qqnorm(
+  residuos,
+  main = "QQ-Plot dos Resíduos"
+)
+
+qqline(residuos, lwd = 2)
+
+# ================================
+# 3. SCALE-LOCATION
+# ================================
+
+sqrt_abs_res <- sqrt(abs(residuos))
+
+plot(
+  y_pred_mean,
+  sqrt_abs_res,
+  pch = 19,
+  xlab = "Valores Ajustados",
+  ylab = expression(sqrt("|Resíduos|")),
+  main = "Scale-Location"
+)
+
+lines(
+  lowess(y_pred_mean, sqrt_abs_res),
+  lwd = 2
+)
+
+# ================================
+# 4. RESÍDUOS VS ORDEM
+# ================================
+
+plot(
+  residuos,
+  type = "p",
+  pch = 19,
+  xlab = "Índice",
+  ylab = "Resíduo",
+  main = "Resíduos vs Ordem"
+)
+
+abline(h = 0, lty = 2)
+
+# ================================
+# 5. HISTOGRAMA DOS RESÍDUOS
+# ================================
+
+hist(
+  residuos,
+  breaks = 20,
+  main = "Histograma dos Resíduos",
+  xlab = "Resíduos"
+)
+
+# ================================
+# 6. DENSIDADE DOS RESÍDUOS
+# ================================
+
+plot(
+  density(residuos),
+  main = "Densidade dos Resíduos",
+  xlab = "Resíduos",
+  lwd = 2
+)
+
+abline(v = 0, lty = 2)
+```
+
+Os resultados são satisfatórios, a escolha de distribuição t para os resíduos foi adequada.
